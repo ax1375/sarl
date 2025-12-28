@@ -18,6 +18,7 @@ class SARLTrainer:
         self.optimizer = optimizer or optim.Adam(model.parameters(), lr=lr)
         self.beta_scheduler = beta_scheduler
         self.epoch, self.global_step = 0, 0
+        self.stop_training = False  # Flag for early stopping
         self.history = {'train_loss': [], 'val_loss': [], 'violations': {'v1': [], 'v2': [], 'v3': []},
                        'weights': {'alpha1': [], 'alpha2': [], 'alpha3': []}, 'beta': [], 'structure_id': []}
         self.callbacks = []
@@ -120,14 +121,20 @@ class SARLTrainer:
             for cb in self.callbacks:
                 if hasattr(cb, 'on_epoch_end'):
                     cb.on_epoch_end(self, epoch, train_metrics, val_metrics)
-            
+
             if verbose and epoch % 10 == 0:
                 msg = f"Epoch {epoch}: loss={train_metrics['loss']:.4f}"
                 if val_metrics:
                     msg += f", val_acc={val_metrics.get('accuracy', 0):.4f}"
                 msg += f", struct={self.history['structure_id'][-1]}"
                 print(msg)
-        
+
+            # Check for early stopping
+            if self.stop_training:
+                if verbose:
+                    print(f"Training stopped early at epoch {epoch}")
+                break
+
         return self.history
     
     def save(self, path: str):

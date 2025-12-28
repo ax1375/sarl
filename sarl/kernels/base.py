@@ -4,21 +4,41 @@ import torch.nn as nn
 from typing import Optional
 from abc import ABC, abstractmethod
 
+# Constants for numerical stability
+EPSILON = 1e-6
+MIN_BANDWIDTH = 1e-6
+BANDWIDTH_SUBSAMPLE_SIZE = 5000
+
 
 def compute_median_bandwidth(X: torch.Tensor) -> torch.Tensor:
-    """Compute median heuristic bandwidth."""
+    """Compute median heuristic bandwidth.
+
+    Args:
+        X: Input tensor of shape (n, d)
+
+    Returns:
+        Median pairwise distance, clamped to minimum value for stability
+
+    Raises:
+        ValueError: If X is empty or has invalid shape
+    """
+    if X.numel() == 0:
+        raise ValueError("Cannot compute bandwidth for empty tensor")
+    if X.dim() < 2:
+        raise ValueError(f"Expected at least 2D tensor, got {X.dim()}D")
+
     n = X.shape[0]
-    if n > 5000:
-        idx = torch.randperm(n)[:5000]
+    if n > BANDWIDTH_SUBSAMPLE_SIZE:
+        idx = torch.randperm(n)[:BANDWIDTH_SUBSAMPLE_SIZE]
         X = X[idx]
-        n = 5000
+        n = BANDWIDTH_SUBSAMPLE_SIZE
     X_flat = X.reshape(n, -1).float()
     dists_sq = torch.cdist(X_flat, X_flat, p=2).pow(2)
     mask = torch.triu(torch.ones(n, n, device=X.device, dtype=torch.bool), diagonal=1)
     dists = dists_sq[mask].sqrt()
     if dists.numel() == 0:
         return torch.tensor(1.0, device=X.device)
-    return torch.clamp(torch.median(dists), min=1e-6)
+    return torch.clamp(torch.median(dists), min=MIN_BANDWIDTH)
 
 
 class BaseKernel(nn.Module, ABC):
@@ -55,15 +75,30 @@ class GaussianKernel(BaseKernel):
         return True
     
     def forward(self, X: torch.Tensor, Y: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute Gaussian kernel matrix.
+
+        Args:
+            X: Input tensor of shape (n, d)
+            Y: Optional second input of shape (m, d). If None, uses X.
+
+        Returns:
+            Kernel matrix of shape (n, m)
+        """
+        if X.numel() == 0:
+            raise ValueError("Input tensor X cannot be empty")
+
         if Y is None:
             Y = X
+        elif Y.numel() == 0:
+            raise ValueError("Input tensor Y cannot be empty")
+
         X_flat = X.reshape(X.shape[0], -1).float()
         Y_flat = Y.reshape(Y.shape[0], -1).float()
         sigma = self.bandwidth if self.bandwidth is not None else compute_median_bandwidth(X_flat)
         if isinstance(sigma, (int, float)):
             sigma = torch.tensor(sigma, device=X.device, dtype=X.dtype)
         dists_sq = torch.cdist(X_flat, Y_flat, p=2).pow(2)
-        return torch.exp(-dists_sq / (2 * sigma.pow(2) + 1e-8))
+        return torch.exp(-dists_sq / (2 * sigma.pow(2) + EPSILON))
 
 
 class LaplacianKernel(BaseKernel):
@@ -77,15 +112,30 @@ class LaplacianKernel(BaseKernel):
         return True
     
     def forward(self, X: torch.Tensor, Y: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute Laplacian kernel matrix.
+
+        Args:
+            X: Input tensor of shape (n, d)
+            Y: Optional second input of shape (m, d). If None, uses X.
+
+        Returns:
+            Kernel matrix of shape (n, m)
+        """
+        if X.numel() == 0:
+            raise ValueError("Input tensor X cannot be empty")
+
         if Y is None:
             Y = X
+        elif Y.numel() == 0:
+            raise ValueError("Input tensor Y cannot be empty")
+
         X_flat = X.reshape(X.shape[0], -1).float()
         Y_flat = Y.reshape(Y.shape[0], -1).float()
         sigma = self._bandwidth if self._bandwidth else compute_median_bandwidth(X_flat)
         if isinstance(sigma, (int, float)):
             sigma = torch.tensor(sigma, device=X.device, dtype=X.dtype)
         dists = torch.cdist(X_flat, Y_flat, p=1)
-        return torch.exp(-dists / (sigma + 1e-8))
+        return torch.exp(-dists / (sigma + EPSILON))
 
 
 class DeltaKernel(BaseKernel):
@@ -99,8 +149,23 @@ class DeltaKernel(BaseKernel):
         return True
     
     def forward(self, X: torch.Tensor, Y: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute Delta kernel matrix for discrete variables.
+
+        Args:
+            X: Input tensor of shape (n,) or (n, d)
+            Y: Optional second input of shape (m,) or (m, d). If None, uses X.
+
+        Returns:
+            Kernel matrix of shape (n, m)
+        """
+        if X.numel() == 0:
+            raise ValueError("Input tensor X cannot be empty")
+
         if Y is None:
             Y = X
+        elif Y.numel() == 0:
+            raise ValueError("Input tensor Y cannot be empty")
+
         if X.dim() == 1:
             X = X.unsqueeze(1)
         if Y.dim() == 1:
@@ -113,5 +178,5 @@ class DeltaKernel(BaseKernel):
             Y_idx = Y.squeeze(1).long()
         K = (X_idx.unsqueeze(1) == Y_idx.unsqueeze(0)).float()
         if self.normalize:
-            K = K / (K.sum(dim=1, keepdim=True).sqrt() * K.sum(dim=0, keepdim=True).sqrt() + 1e-8)
+            K = K / (K.sum(dim=1, keepdim=True).sqrt() * K.sum(dim=0, keepdim=True).sqrt() + EPSILON)
         return K

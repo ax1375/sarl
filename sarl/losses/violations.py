@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 from typing import Dict, Optional, Tuple, NamedTuple
-from ..kernels import HSIC, HSIC_RFF, GaussianKernel, DeltaKernel
+from ..kernels import HSIC, HSIC_RFF, GaussianKernel, DeltaKernel, EPSILON
 
 
 class StructureViolation(NamedTuple):
@@ -33,29 +33,53 @@ class ViolationMetrics(nn.Module):
         self.hsic_residual = HSIC(kernel_x=GaussianKernel(), kernel_y=DeltaKernel())
     
     def forward(self, phi_x: torch.Tensor, y: torch.Tensor, e: torch.Tensor, normalize: bool = True) -> StructureViolation:
+        """Compute violation metrics for all three causal structures.
+
+        Args:
+            phi_x: Learned representation of X, shape (n, d_phi)
+            y: Labels, shape (n,) or (n, d_y)
+            e: Environment indicators, shape (n,) or (n, n_envs)
+            normalize: If True, take square root of violations
+
+        Returns:
+            StructureViolation containing v1, v2, v3
+        """
+        if phi_x.numel() == 0 or y.numel() == 0 or e.numel() == 0:
+            raise ValueError("Input tensors cannot be empty")
+
         if y.dim() == 1:
             y = y.unsqueeze(1).float()
         else:
             y = y.float()
-        
+
         if e.dim() == 1:
-            num_envs = max(self.num_envs, e.max().item() + 1)
+            num_envs = max(self.num_envs, int(e.max().item()) + 1)
             e_onehot = torch.nn.functional.one_hot(e.long(), int(num_envs)).float()
         else:
             e_onehot = e.float()
-        
+
         v1 = self._compute_v1(phi_x, y, e_onehot)
         v2 = self._compute_v2(phi_x, y, e_onehot)
         v3 = self._compute_v3(phi_x, e_onehot)
-        
+
         if normalize:
-            v1 = v1.sqrt() if v1 > 0 else v1
-            v2 = v2.sqrt() if v2 > 0 else v2
-            v3 = v3.sqrt() if v3 > 0 else v3
-        
+            # Clamp to avoid negative values before sqrt (can occur due to numerical errors)
+            v1 = torch.clamp(v1, min=0.0).sqrt()
+            v2 = torch.clamp(v2, min=0.0).sqrt()
+            v3 = torch.clamp(v3, min=0.0).sqrt()
+
         return StructureViolation(v1=v1, v2=v2, v3=v3)
     
     def _kernel_residual(self, target: torch.Tensor, conditioning: torch.Tensor) -> torch.Tensor:
+        """Compute kernel residuals using kernel ridge regression.
+
+        Args:
+            target: Target variable to residualize
+            conditioning: Conditioning variable
+
+        Returns:
+            Residualized target
+        """
         n = target.shape[0]
         kernel = GaussianKernel()
         K = kernel(conditioning)
@@ -64,7 +88,8 @@ class ViolationMetrics(nn.Module):
             target = target.unsqueeze(1)
         try:
             alpha = torch.linalg.solve(K_reg, target)
-        except:
+        except (RuntimeError, torch.linalg.LinAlgError):
+            # If direct solve fails, use least squares
             alpha = torch.linalg.lstsq(K_reg, target).solution
         return target - K @ alpha
     

@@ -10,13 +10,23 @@ class MLPEncoder(nn.Module):
                  activation: str = 'relu', dropout: float = 0.0, batch_norm: bool = True):
         super().__init__()
         self.input_dim, self.output_dim = input_dim, output_dim
+
+        # Create activation function (don't create all activations, just the one we need)
+        activation_map = {
+            'relu': nn.ReLU,
+            'leaky_relu': lambda: nn.LeakyReLU(0.2),
+            'elu': nn.ELU,
+            'gelu': nn.GELU
+        }
+        activation_fn = activation_map.get(activation, nn.ReLU)
+
         layers = []
         prev_dim = input_dim
         for hidden_dim in hidden_dims:
             layers.append(nn.Linear(prev_dim, hidden_dim))
             if batch_norm:
                 layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append({'relu': nn.ReLU(), 'leaky_relu': nn.LeakyReLU(0.2), 'elu': nn.ELU(), 'gelu': nn.GELU()}.get(activation, nn.ReLU()))
+            layers.append(activation_fn())
             if dropout > 0:
                 layers.append(nn.Dropout(dropout))
             prev_dim = hidden_dim
@@ -48,12 +58,22 @@ class ConvEncoder(nn.Module):
             prev_channels = out_channels
         self.conv = nn.Sequential(*layers)
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = None
-    
+
+        # Calculate feature dimension based on architecture
+        # After convolutions and pooling, we have base_channels * 2^(num_layers-1) channels
+        conv_output_channels = base_channels * (2 ** (num_layers - 1))
+        self.fc = nn.Linear(conv_output_channels, output_dim)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through convolutional encoder.
+
+        Args:
+            x: Input image tensor of shape (batch, channels, height, width)
+
+        Returns:
+            Encoded representation of shape (batch, output_dim)
+        """
         features = self.pool(self.conv(x)).view(x.size(0), -1)
-        if self.fc is None:
-            self.fc = nn.Linear(features.size(1), self.output_dim).to(features.device)
         return self.fc(features)
 
 

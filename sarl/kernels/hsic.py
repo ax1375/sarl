@@ -2,8 +2,11 @@
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Union
-from .base import GaussianKernel, DeltaKernel, compute_median_bandwidth, BaseKernel
+from .base import GaussianKernel, DeltaKernel, compute_median_bandwidth, BaseKernel, EPSILON
 from .rff import RandomFourierFeatures, estimate_bandwidth_from_data
+
+# Minimum sample size for unbiased HSIC
+MIN_SAMPLES_UNBIASED_HSIC = 4
 
 
 class HSIC(nn.Module):
@@ -15,8 +18,26 @@ class HSIC(nn.Module):
         self.biased = biased
     
     def forward(self, X: torch.Tensor, Y: torch.Tensor, return_kernels: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Compute HSIC between X and Y.
+
+        Args:
+            X: Input tensor of shape (n, d_x)
+            Y: Input tensor of shape (n, d_y)
+            return_kernels: If True, return (hsic, K_X, K_Y)
+
+        Returns:
+            HSIC value, or tuple of (hsic, K_X, K_Y) if return_kernels=True
+
+        Raises:
+            ValueError: If inputs are empty or have mismatched sizes
+        """
+        if X.numel() == 0 or Y.numel() == 0:
+            raise ValueError("Input tensors cannot be empty")
+
         n = X.shape[0]
-        assert Y.shape[0] == n
+        if Y.shape[0] != n:
+            raise ValueError(f"X and Y must have same number of samples. Got X: {X.shape[0]}, Y: {Y.shape[0]}")
+
         K_X = self.kernel_x(X)
         K_Y = self.kernel_y(Y)
         K_X_c = self._center_kernel(K_X)
@@ -31,8 +52,23 @@ class HSIC(nn.Module):
         return K - K.mean(dim=1, keepdim=True) - K.mean(dim=0, keepdim=True) + K.mean()
     
     def _unbiased_hsic(self, K_X: torch.Tensor, K_Y: torch.Tensor, n: int) -> torch.Tensor:
-        if n < 4:
+        """Compute unbiased HSIC estimator.
+
+        Args:
+            K_X: Kernel matrix for X
+            K_Y: Kernel matrix for Y
+            n: Number of samples
+
+        Returns:
+            Unbiased HSIC estimate
+
+        Note:
+            Falls back to biased estimator for n < 4 to avoid division by zero
+        """
+        if n < MIN_SAMPLES_UNBIASED_HSIC:
+            # Fall back to biased estimator for small samples
             return (self._center_kernel(K_X) * self._center_kernel(K_Y)).sum() / (n * n)
+
         K_X_t, K_Y_t = K_X.clone(), K_Y.clone()
         K_X_t.fill_diagonal_(0)
         K_Y_t.fill_diagonal_(0)
@@ -62,8 +98,25 @@ class HSIC_RFF(nn.Module):
             self._bandwidth_y_set = True
     
     def forward(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        """Compute RFF-approximated HSIC between X and Y.
+
+        Args:
+            X: Input tensor of shape (n, d_x)
+            Y: Input tensor of shape (n, d_y)
+
+        Returns:
+            Approximated HSIC value
+
+        Raises:
+            ValueError: If inputs are empty or have mismatched sizes
+        """
+        if X.numel() == 0 or Y.numel() == 0:
+            raise ValueError("Input tensors cannot be empty")
+
         n = X.shape[0]
-        assert Y.shape[0] == n
+        if Y.shape[0] != n:
+            raise ValueError(f"X and Y must have same number of samples. Got X: {X.shape[0]}, Y: {Y.shape[0]}")
+
         self._ensure_bandwidths(X, Y)
         psi_X = self.rff_x(X)
         psi_Y = self.rff_y(Y)
@@ -92,6 +145,15 @@ class ConditionalHSIC(nn.Module):
         return self.hsic(X_res, Y_res)
     
     def _compute_residuals(self, target: torch.Tensor, conditioning: torch.Tensor) -> torch.Tensor:
+        """Compute residuals after conditioning on Z using kernel ridge regression.
+
+        Args:
+            target: Target variable to residualize
+            conditioning: Conditioning variable Z
+
+        Returns:
+            Residualized target
+        """
         n = target.shape[0]
         K_Z = self.kernel_z(conditioning)
         K_reg = K_Z + self.ridge_lambda * torch.eye(n, device=K_Z.device)
@@ -99,9 +161,12 @@ class ConditionalHSIC(nn.Module):
             target = target.unsqueeze(1)
         try:
             alpha = torch.linalg.solve(K_reg, target)
-        except:
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            # If direct solve fails (e.g., singular matrix), use least squares
             alpha = torch.linalg.lstsq(K_reg, target).solution
-        return (target - K_Z @ alpha).squeeze(-1) if (target - K_Z @ alpha).shape[-1] == 1 else (target - K_Z @ alpha)
+
+        residual = target - K_Z @ alpha
+        return residual.squeeze(-1) if residual.shape[-1] == 1 else residual
 
 
 def hsic_test(X: torch.Tensor, Y: torch.Tensor, num_permutations: int = 100, alpha: float = 0.05, use_rff: bool = False) -> Tuple[torch.Tensor, torch.Tensor, bool]:
