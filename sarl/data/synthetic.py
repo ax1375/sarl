@@ -99,13 +99,25 @@ class SyntheticDataGenerator:
         self.structure, self.n_features, self.n_envs, self.seed = structure, n_features, n_envs, seed
     
     def generate(self, n_samples: int) -> SyntheticData:
+        """Generate synthetic data for the specified causal structure.
+
+        Args:
+            n_samples: Number of samples to generate
+
+        Returns:
+            SyntheticData with generated X, Y, E and structure information
+
+        Raises:
+            ValueError: If structure is not in {1, 2, 3}
+        """
         if self.structure == 1:
             return generate_anticausal_data(n_samples, self.n_features, self.n_envs, seed=self.seed)
         elif self.structure == 2:
             return generate_confounded_descendant_data(n_samples, self.n_features, self.n_envs, seed=self.seed)
         elif self.structure == 3:
             return generate_confounded_outcome_data(n_samples, self.n_features, self.n_envs, seed=self.seed)
-        raise ValueError(f"Unknown structure: {self.structure}")
+        else:
+            raise ValueError(f"Unknown structure: {self.structure}. Must be 1, 2, or 3.")
     
     def generate_train_test(self, n_train: int, n_test: int, test_shift: float = 1.0) -> Tuple[SyntheticData, SyntheticData]:
         train_data = self.generate(n_train)

@@ -11,11 +11,20 @@ class Callback:
 
 
 class EarlyStopping(Callback):
+    """Early stopping callback to stop training when monitored metric stops improving.
+
+    Args:
+        monitor: Metric name to monitor ('val_loss', 'train_loss', etc.)
+        patience: Number of epochs with no improvement to wait before stopping
+        min_delta: Minimum change in monitored metric to qualify as improvement
+        mode: 'min' for metrics that should decrease, 'max' for metrics that should increase
+    """
     def __init__(self, monitor: str = 'val_loss', patience: int = 10, min_delta: float = 1e-4, mode: str = 'min'):
         self.monitor, self.patience, self.min_delta, self.mode = monitor, patience, min_delta, mode
         self.best = float('inf') if mode == 'min' else float('-inf')
         self.counter = 0
-    
+        self.should_stop = False
+
     def on_epoch_end(self, trainer, epoch, train_metrics, val_metrics):
         current = {**train_metrics, **val_metrics}.get(self.monitor)
         if current is None:
@@ -27,7 +36,9 @@ class EarlyStopping(Callback):
         else:
             self.counter += 1
             if self.counter >= self.patience:
-                print(f"Early stopping at epoch {epoch}")
+                print(f"Early stopping triggered at epoch {epoch}")
+                self.should_stop = True
+                trainer.stop_training = True  # Signal trainer to stop
 
 
 class ModelCheckpoint(Callback):
