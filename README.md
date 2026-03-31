@@ -134,15 +134,6 @@ python 07_baselines_pacs.py
 | CIRCE | 66.5 +/- 2.6 |
 | **SaCRL** | **73.9 +/- 4.1** |
 
-**Colored MNIST -- OOD Accuracy:**
-
-| Method | OOD Acc (%) |
-|--------|------------|
-| ERM | 11.1 +/- 0.7 |
-| IRM | 49.9 +/- 2.5 |
-| VREx | 28.2 +/- 2.8 |
-| CIRCE | 13.9 +/- 2.8 |
-| **SaCRL** | pending |
 
 ## Run Tests
 
@@ -161,13 +152,3 @@ python tests/test_violations.py
 | `beta_max` | 50 | SoftMin temperature (annealed from 1 to beta_max) |
 | `rho` | 0.5 | CVaR quantile for robust loss |
 | `N_RESTARTS` | 3-10 | Multi-start initializations for model selection |
-
-## Citation
-
-```
-@article{sacrl2025,
-  title={Structure-Agnostic Causal Representation Learning},
-  author={...},
-  year={2025}
-}
-```
